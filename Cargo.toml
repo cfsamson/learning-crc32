@@ -9,6 +9,4 @@ edition = "2018"
 [dependencies]
 
 [features]
-reflect_data = []
-reflect_remainder = []
-reflect_all = ["reflect_data", "reflect_remainder"]
+reflect = []
