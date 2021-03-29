@@ -1,114 +1,99 @@
-use std::mem;
-
-/// The width of the CRC calculation and result
-type Crc = u32;
-
-const WIDTH: u8 = 8 * mem::size_of::<Crc>() as u8;
-const TOPBIT: Crc = 1 << (WIDTH - 1);
-
-const fn reflect(data: Crc, n_bits: u8) -> Crc {
-    let mut data = data;
-    let mut reflection = 0;
-    // Reflect the data about the center bit
-
-    let mut bit = 0;
-    while bit < n_bits {
-        // If the LSB bit is set, set the reflection of it
-        if data & 0x01 == 0x01 {
-            reflection |= 1 <<((n_bits - 1) - bit);
-        }
-
-        data = data >> 1;
-        bit += 1;
-    }
-
-    reflection
-}
-
-#[cfg(feature="reflect_data")]
-const fn reflect_data(data: u8) -> u8 {
-    reflect(data as Crc, 8) as u8
-}
-
-#[cfg(feature="reflect_remainder")]
-const fn reflect_remainder(remainder: Crc) -> Crc {
-    reflect(remainder, WIDTH)
-}
-
+// CRC-32
+// Truncated Poly.:     0x04C11DB7
+// Initial remainder:   0xFFFFFFFF
+// Reflect data:        yes
+// Reflect remainder:   yes
+// Expected result:     0xDBF1FE9A
+//
+//        initial reminder                                                                       message
+// --------------------------------|----------------------------------------------------------------------------------------------------------------------------------------|
+// 11111111111111111111111111111111 0100100101001000010001000101001000000000000000000000001110001100000000000000000000000010110100000000100000000110000000000000000000000000
+// 100000100110000010001110110110111
+//  |------------------------------|
+//    Trunc. polynomial (32 bits)
+// |-------------------------------|
+//    Full polynomial (33 bits)
+//
+// - We know that any valid polynomial has to start with a 1 bit so the
+// "interesting" part is everythin after the first bit (called the truncated
+// polynomial). See comment in the `crc` function.
+//
 /// Reflect Data: reverse bit ordering of data
 /// Reflect Remainder: reverse bit ordering of remainder
 /// Check value: The result of CRC'ing the ASCII char[]: "123456789"
 /// See: https://barrgroup.com/Embedded-Systems/How-To/CRC-Calculation-C-Code
 fn main() {
-    println!("TOPBIT: {:08b}", TOPBIT);
-    println!("WIDTH: {}", WIDTH);
 
-    let msg: &[u8] = "123456789".as_bytes();
-    // final xor of 0xFFFFFFF is the same as inverting the bits
-    // (or complementing the value)
-    let crc = crc_slow(0x04C11DB7, 0xFFFFFFFF, 0xFFFFFFFF, msg);
+    let msg: &[u8] = &[0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x03, 0x8C, 0x00, 0x00, 0x02, 0xD0, 0x08, 0x06, 0x00, 0x00, 0x00];
+    let crc = crc(0x04C11DB7, 0xFFFFFFFF, 0xFFFFFFFF, msg);
 
-    println!("CRC: {:04b}", crc);
-    println!("Debug: {:0x}", crc);
+    print!("msg: ");
+    for b in msg {
+        print!("{:08b}", b);
+    }
+    print!("\n\n");
+    println!("------- Results -------");
+    println!("CRC bits: {:032b}", crc);
+    println!("CRC hex: {:0X}", crc);
 }
 
-/// Fast is to precalculate all the 256 results from the divison and memoize it
-fn crc_slow(poly: Crc, remainder: Crc, final_xor: Crc, message: &[u8]) -> Crc {
-    println!("polynominal: {:032b}", poly);
+/// This is what we do for CRC-32, step by step:
+///
+/// 1. We make a copy of the remainder that we can change, which will store the
+/// final CRC
+/// 2. For each byte in the message:
+///     1. Reverse the bits og the byte (1100) => (0011)
+///     2. We push the message bytes to the leftmost bits of the remainder
+///     3. For each of the 8 bits of the "message byte" we:
+///         1. Shift the bits 1 position left if the leftmost is a 0
+///         2. When the leftmost is a 1, we shift out 1 byte (since it will always end up a 0)
+///            then we divide the remainder with the truncated polynomial
+/// 3. In CRC-32 we XOR the result with the value 0xFFFFFFF (which is the same as
+///    inverting the bits)
+/// 4. We reverse the bits of the final remainder to get our CRC
+fn crc(poly: u32, remainder: u32, final_xor: u32, message: &[u8]) -> u32 {
+    println!("polynomial: {:032b}", poly);
     println!("initial_remainder: {:032b}", remainder);
     println!("final_xor: {:032b}", final_xor);
-
-    let mut remainder: Crc = remainder;
     println!("remainder: {:032b}", remainder);
 
-    println!("reflected: {:032b}", remainder);
-    // Perform modulo-2 division, a byte at a time
+    // 1. Just make a mutable variable storing the remainder
+    let mut remainder: u32 = remainder;
+
+    // 2. Perform modulo-2 division, a byte at a time
     for b in message {
         let b = *b;
-        #[cfg(feature="reflect_data")]
-        let b = reflect_data(b);
-        remainder ^= (b as Crc) << (WIDTH - 8);
+        // 2.1 reverse bits
+        let b = b.reverse_bits();
 
-        // For each bit position in the message
+        // 2.2 Shift the reflected message bytes to the leftmost bits of remainder. Ex:
+        // beofre: 11111111111111111111111111111111
+        // after:  01101101111111111111111111111111
+        remainder ^= (b as u32) << (32 - 8);
+
+        // 2.3 For each bit position in the message
         for _ in 0..8 {
-            // if the uppermost bit is a 1
-            if remainder & TOPBIT == TOPBIT {
-                // XOR the previous remainder with the divisor
-                remainder = (remainder << 1) ^ poly as Crc;
+            if remainder & 0b10000000000000000000000000000000 == 0b10000000000000000000000000000000 {
+                // 2.3.2 (see initial explanation of steps)
+                remainder = (remainder << 1) ^ poly as u32;
+                //          |--------------|
+                //                  ^
+                //                  IMPORTANT: because we know that the "full poly"
+                //                  actually starts with a 1 (which is not included
+                //                  in the trucated poly) it will always "switch" the
+                //                  leftmost bit to a 0 whcih is shifted out so we
+                //                  actually shift it out here before we divide the
+                //                  rest with the truncated poly.
             } else {
-                // Shift the next bit of the message into the remainder
+                // 2.3.1 Shift the bits 1 step left
                 remainder = remainder << 1;
             }
         }
     }
 
+    // 3. XOR with the value 0xFFFFFFFF
     let remainder = remainder ^ final_xor;
-    #[cfg(feature="reflect_remainder")]
-    let remainder: Crc = reflect_remainder(remainder);
+    // 4. reverse bits to get the final CRC
+    let remainder: u32 = remainder.reverse_bits();
     remainder
-}
-
-
-#[test]
-fn reflect_u8_works() {
-    let test = 0b00001111;
-    let exp = 0b11110000;
-    let test = reflect(test, 8);
-    assert_eq!(exp, test);
-}
-
-#[test]
-fn reflect_u32_works() {
-    let test: u32 = 0b00000000000000001111111111111111;
-    let exp: u32  = 0b11111111111111110000000000000000;
-    let test = reflect(test, 32);
-    assert_eq!(exp, test);
-}
-
-#[test]
-#[cfg_attr(not(feature = "reflect_all"), ignore)]
-fn test_crc() {
-    let msg: &[u8] = "123456789".as_bytes();
-    let test = crc_slow(0x04C11DB7, 0xFFFFFFFF, 0xFFFFFFFF, msg);
-    assert_eq!(test, 0xCBF43926);
 }
