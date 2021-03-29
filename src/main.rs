@@ -18,10 +18,6 @@
 // "interesting" part is everythin after the first bit (called the truncated
 // polynomial). See comment in the `crc` function.
 //
-/// Reflect Data: reverse bit ordering of data
-/// Reflect Remainder: reverse bit ordering of remainder
-/// Check value: The result of CRC'ing the ASCII char[]: "123456789"
-/// See: https://barrgroup.com/Embedded-Systems/How-To/CRC-Calculation-C-Code
 fn main() {
 
     let msg: &[u8] = &[0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x03, 0x8C, 0x00, 0x00, 0x02, 0xD0, 0x08, 0x06, 0x00, 0x00, 0x00];
@@ -52,7 +48,7 @@ fn main() {
 ///    inverting the bits)
 /// 4. We reverse the bits of the final remainder to get our CRC
 fn crc(poly: u32, remainder: u32, final_xor: u32, message: &[u8]) -> u32 {
-    println!("polynomial: {:032b}", poly);
+    println!("trunc. polynomial: {:032b}", poly);
     println!("initial_remainder: {:032b}", remainder);
     println!("final_xor: {:032b}", final_xor);
     println!("remainder: {:032b}", remainder);
